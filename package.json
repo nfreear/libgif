@@ -1,0 +1,10 @@
+{
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "index.js",
+    "./legacy": "libgif.js",
+    "./original": "libgif.js",
+    "./rubbable": "rubbable.js"
+  }
+}
