@@ -454,7 +454,7 @@ import Stream from './Stream.js';
             div.appendChild(toolbar);
 
             parent.insertBefore(div, gif);
-            parent.removeChild(gif);
+            gif.setAttribute('hidden', ''); // Was: parent.removeChild(gif);
 
             if (options.c_w && options.c_h) setSizes(options.c_w, options.c_h);
             initialized=true;
