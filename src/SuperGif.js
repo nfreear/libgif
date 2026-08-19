@@ -390,7 +390,7 @@ import Stream from './Stream.js';
         }()); // End: player.
 
         var doDecodeProgress = function (draw) {
-            doShowProgress(stream.pos, stream.data.length, draw);
+            doShowProgress(stream.pos, stream.length, draw); // Was: stream.data.length,
         };
 
         var doNothing = function () {};
