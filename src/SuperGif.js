@@ -1,7 +1,49 @@
-import parseGIF from './GifParser.js';
+import GifParser from './GifParser.js';
 import Stream from './Stream.js';
 
-    var SuperGif = function ( opts ) {
+/**
+ * Thin wrapper around the original "SuperGif" class below.
+ */
+class SuperGif {
+  #inner; // Reference to original class.
+  #options;
+
+  // Getters (7): readonly properties and state.
+  get playing () { return this.#inner.get_playing(); }
+  get canvas () { return this.#inner.get_canvas(); }
+  get canvas_scale () { return this.#inner.get_canvas_scale(); }
+  get loading () { return this.#inner.get_loading(); }
+  get auto_play () { return this.#inner.get_auto_play(); }
+  get length () { return this.#inner.get_length(); }
+  get current_frame () { return this.#inner.get_current_frame(); }
+
+  constructor (options) {
+    this.#options = options;
+    this.#inner = new SuperGifInner(options);
+  }
+
+  load (callback) {
+    console.assert(this.#options.gif, 'Missing "options.gif" param');
+    this.#inner.load(callback);
+  }
+
+  load_url (src, callback) {
+    console.assert(typeof src === 'string', 'Missing "src" param');
+    this.#inner.load_url(src, callback);
+  }
+
+  // Methods: play controls.
+  play  () { this.#inner.play(); }
+  pause () { this.#inner.pause(); }
+
+  move_relative (delta) { this.#inner.move_relative(delta); }
+  move_to (pos) { this.#inner.move_to(pos); }
+}
+
+/**
+ * The original "SuperGif" class.
+ */
+function SuperGifInner ( opts ) { // Was: var SuperGif = function ( opts ) {
         var options = {
             //viewport position
             vp_l: 0,
@@ -62,10 +104,12 @@ import Stream from './Stream.js';
         // callbacks are involved.
         var doParse = function () {
             try {
-                parseGIF(stream, handler);
+                const gifParser = new GifParser(stream, handler);
+                gifParser.parse();
+                // Was: parseGIF(stream, handler);
             }
             catch (err) {
-                doLoadError('parse');
+                doLoadError('parse', err);
             }
         };
 
@@ -145,7 +189,10 @@ import Stream from './Stream.js';
             }
         };
 
-        var doLoadError = function (originOfError) {
+        var doLoadError = function (originOfError, error) {
+            // console.error('Error:', originOfError, error);
+            canvas.dataset.error = error;
+
             var drawError = function () {
                 ctx.fillStyle = 'black';
                 ctx.fillRect(0, 0, options.c_w ? options.c_w : hdr.width, options.c_h ? options.c_h : hdr.height);
@@ -165,6 +212,8 @@ import Stream from './Stream.js';
             }; // Fake header.
             frames = [];
             drawError();
+
+            throw error;
         };
 
         var doHdr = function (_hdr) {
@@ -533,7 +582,7 @@ import Stream from './Stream.js';
                 };
                 h.onload = function(e) {
                     if (this.status != 200) {
-                        doLoadError('xhr - response');
+                        doLoadError('xhr - response', new Error(`HTTP status: ${this.status}`));
                     }
                     // emulating response field for IE9
                     if (!('response' in this)) {
@@ -551,7 +600,7 @@ import Stream from './Stream.js';
                 h.onprogress = function (e) {
                     if (e.lengthComputable) doShowProgress(e.loaded, e.total, true);
                 };
-                h.onerror = function() { doLoadError('xhr'); };
+                h.onerror = function(e) { doLoadError('xhr', new Error(`${e.type} event`)); };
                 h.send();
             },
             load: function (callback) {
@@ -567,4 +616,5 @@ import Stream from './Stream.js';
         }; // End: return.
     };
 
+export { SuperGif, SuperGifInner };
 export default SuperGif;

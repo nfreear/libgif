@@ -1,225 +1,267 @@
-import lzwDecode from './LzwDecoder.js';
+import { lzwDecode, LzwDecoder } from './LzwDecoder.js';
 import { bitsToNum, byteToBitArr } from './util.js';
 
-// The actual parsing; returns an object with properties.
-var parseGIF = function (st, handler) {
-    handler || (handler = {});
+/**
+ * GIF Parser class.
+ * Converted from the legacy ESM (./legacy/esm/parseGIF.js)
+ * Used in "SuperGif".
+ * @see ./legacy/esm/parseGIF.js
+ */
+export default class GifParser {
+  #handler;
+  #stream;
 
-    // LZW (GIF-specific)
-    var parseCT = function (entries) { // Each entry is 3 bytes, for RGB.
-        var ct = [];
-        for (var i = 0; i < entries; i++) {
-            ct.push(st.readBytes(3));
-        }
-        return ct;
-    };
+  get st () { return this.#stream; }
+  get handler () { return this.#handler; }
 
-    var readSubBlocks = function () {
-        var size, data;
-        data = '';
-        do {
-            size = st.readByte();
-            data += st.read(size);
-        } while (size !== 0);
-        return data;
-    };
+  constructor (stream, handler) {
+    this.#stream = stream;
+    this.#handler = handler || {};
+    console.assert(stream, 'ParseGIF missing stream');
+    console.assert(typeof handler === 'object', 'ParseGIF missing handler');
+    console.debug('GifParser:', this);
+  }
 
-    var parseHeader = function () {
-        var hdr = {};
-        hdr.sig = st.read(3);
-        hdr.ver = st.read(3);
-        if (hdr.sig !== 'GIF') throw new Error('Not a GIF file.'); // XXX: This should probably be handled more nicely.
-        hdr.width = st.readUnsigned();
-        hdr.height = st.readUnsigned();
+  // handler.hdr && handler.hdr(hdr);
+  #handle (key, data) {
+    this.#handler[key] && this.#handler[key](data);
+  }
 
-        var bits = byteToBitArr(st.readByte());
-        hdr.gctFlag = bits.shift();
-        hdr.colorRes = bitsToNum(bits.splice(0, 3));
-        hdr.sorted = bits.shift();
-        hdr.gctSize = bitsToNum(bits.splice(0, 3));
+  // handler.app && handler.app[block.identifier] && handler.app[block.identifier](block);
+  #handleApp (blockId, blockData) {
+    this.#handler.app && this.#handler.app[blockId] && this.#handler.app[blockId](blockData);
+  }
 
-        hdr.bgColor = st.readByte();
-        hdr.pixelAspectRatio = st.readByte(); // if not 0, aspectRatio = (pixelAspectRatio + 15) / 64
-        if (hdr.gctFlag) {
-            hdr.gct = parseCT(1 << (hdr.gctSize + 1));
-        }
-        handler.hdr && handler.hdr(hdr);
-    };
+  // LZW (GIF-specific)
+  #parseCT (entries) { // Each entry is 3 bytes, for RGB.
+      var ct = [];
+      for (var i = 0; i < entries; i++) {
+          ct.push(this.st.readBytes(3));
+      }
+      return ct;
+  }
 
-    var parseExt = function (block) {
-        var parseGCExt = function (block) {
-            var blockSize = st.readByte(); // Always 4
-            var bits = byteToBitArr(st.readByte());
-            block.reserved = bits.splice(0, 3); // Reserved; should be 000.
-            block.disposalMethod = bitsToNum(bits.splice(0, 3));
-            block.userInput = bits.shift();
-            block.transparencyGiven = bits.shift();
+  #readSubBlocks () {
+      var size, data;
+      data = '';
+      do {
+          size = this.st.readByte();
+          data += this.st.read(size);
+      } while (size !== 0);
+      return data;
+  }
 
-            block.delayTime = st.readUnsigned();
+  #parseHeader () {
+      var hdr = {};
+      hdr.sig = this.st.read(3);
+      hdr.ver = this.st.read(3);
+      if (hdr.sig !== 'GIF') throw new Error('Not a GIF file.'); // XXX: This should probably be handled more nicely.
+      hdr.width = this.st.readUnsigned();
+      hdr.height = this.st.readUnsigned();
 
-            block.transparencyIndex = st.readByte();
+      var bits = byteToBitArr(this.st.readByte());
+      hdr.gctFlag = bits.shift(); // GCT - Global Color Table.
+      hdr.colorRes = bitsToNum(bits.splice(0, 3));
+      hdr.sorted = bits.shift();
+      hdr.gctSize = bitsToNum(bits.splice(0, 3));
 
-            block.terminator = st.readByte();
+      hdr.bgColor = this.st.readByte();
+      hdr.pixelAspectRatio = this.st.readByte(); // if not 0, aspectRatio = (pixelAspectRatio + 15) / 64
+      if (hdr.gctFlag) {
+          hdr.gct = this.#parseCT(1 << (hdr.gctSize + 1));
+      }
 
-            handler.gce && handler.gce(block);
-        };
+      this.#handle('hdr', hdr);
+      // Was: handler.hdr && handler.hdr(hdr);
+  } // End: #parseHeader.
 
-        var parseComExt = function (block) {
-            block.comment = readSubBlocks();
-            handler.com && handler.com(block);
-        };
+  #parseGCExt (block) {
+      var blockSize = this.st.readByte(); // Always 4
+      var bits = byteToBitArr(this.st.readByte());
+      block.reserved = bits.splice(0, 3); // Reserved; should be 000.
+      block.disposalMethod = bitsToNum(bits.splice(0, 3));
+      block.userInput = bits.shift();
+      block.transparencyGiven = bits.shift();
 
-        var parsePTExt = function (block) {
-            // No one *ever* uses this. If you use it, deal with parsing it yourself.
-            var blockSize = st.readByte(); // Always 12
-            block.ptHeader = st.readBytes(12);
-            block.ptData = readSubBlocks();
-            handler.pte && handler.pte(block);
-        };
+      block.delayTime = this.st.readUnsigned();
 
-        var parseAppExt = function (block) {
-            var parseNetscapeExt = function (block) {
-                var blockSize = st.readByte(); // Always 3
-                block.unknown = st.readByte(); // ??? Always 1? What is this?
-                block.iterations = st.readUnsigned();
-                block.terminator = st.readByte();
-                handler.app && handler.app.NETSCAPE && handler.app.NETSCAPE(block);
-            };
+      block.transparencyIndex = this.st.readByte();
 
-            var parseUnknownAppExt = function (block) {
-                block.appData = readSubBlocks();
-                // FIXME: This won't work if a handler wants to match on any identifier.
-                handler.app && handler.app[block.identifier] && handler.app[block.identifier](block);
-            };
+      block.terminator = this.st.readByte();
 
-            var blockSize = st.readByte(); // Always 11
-            block.identifier = st.read(8);
-            block.authCode = st.read(3);
-            switch (block.identifier) {
-                case 'NETSCAPE':
-                    parseNetscapeExt(block);
-                    break;
-                default:
-                    parseUnknownAppExt(block);
-                    break;
-            }
-        };
+      this.#handle('gce', block);
+      // Was: handler.gce && handler.gce(block);
+  }
 
-        var parseUnknownExt = function (block) {
-            block.data = readSubBlocks();
-            handler.unknown && handler.unknown(block);
-        };
+  #parseComExt (block) {
+      block.comment = this.#readSubBlocks();
+      this.#handle('com', block);
+      // handler.com && handler.com(block);
+  }
 
-        block.label = st.readByte();
-        switch (block.label) {
-            case 0xF9:
-                block.extType = 'gce';
-                parseGCExt(block);
-                break;
-            case 0xFE:
-                block.extType = 'com';
-                parseComExt(block);
-                break;
-            case 0x01:
-                block.extType = 'pte';
-                parsePTExt(block);
-                break;
-            case 0xFF:
-                block.extType = 'app';
-                parseAppExt(block);
-                break;
-            default:
-                block.extType = 'unknown';
-                parseUnknownExt(block);
-                break;
-        }
-    };
+  #parsePTExt (block) {
+      // No one *ever* uses this. If you use it, deal with parsing it yourself.
+      var blockSize = this.st.readByte(); // Always 12
+      block.ptHeader = this.st.readBytes(12);
+      block.ptData = this.#readSubBlocks();
+      this.#handle('pte', block);
 
-    var parseImg = function (img) {
-        var deinterlace = function (pixels, width) {
-            // Of course this defeats the purpose of interlacing. And it's *probably*
-            // the least efficient way it's ever been implemented. But nevertheless...
-            var newPixels = new Array(pixels.length);
-            var rows = pixels.length / width;
-            var cpRow = function (toRow, fromRow) {
-                var fromPixels = pixels.slice(fromRow * width, (fromRow + 1) * width);
-                newPixels.splice.apply(newPixels, [toRow * width, width].concat(fromPixels));
-            };
+      // Was: handler.pte && handler.pte(block);
+  }
 
-            // See appendix E.
-            var offsets = [0, 4, 2, 1];
-            var steps = [8, 8, 4, 2];
+  #parseNetscapeExt (block) {
+      var blockSize = this.st.readByte(); // Always 3
+      block.unknown = this.st.readByte(); // ??? Always 1? What is this?
+      block.iterations = this.st.readUnsigned();
+      block.terminator = this.st.readByte();
 
-            var fromRow = 0;
-            for (var pass = 0; pass < 4; pass++) {
-                for (var toRow = offsets[pass]; toRow < rows; toRow += steps[pass]) {
-                    cpRow(toRow, fromRow)
-                    fromRow++;
-                }
-            }
+      this.#handleApp('NETSCAPE', block);
+      // Was: handler.app && handler.app.NETSCAPE && handler.app.NETSCAPE(block);
+  }
 
-            return newPixels;
-        };
+  #parseUnknownAppExt (block) {
+      block.appData = this.#readSubBlocks();
+      // FIXME: This won't work if a handler wants to match on any identifier.
+      this.#handleApp(block.identifier, block);
+      // Was: handler.app && handler.app[block.identifier] && handler.app[block.identifier](block);
+  }
 
-        img.leftPos = st.readUnsigned();
-        img.topPos = st.readUnsigned();
-        img.width = st.readUnsigned();
-        img.height = st.readUnsigned();
+  #parseAppExt (block) {
+      var blockSize = this.st.readByte(); // Always 11
+      block.identifier = this.st.read(8);
+      block.authCode = this.st.read(3);
 
-        var bits = byteToBitArr(st.readByte());
-        img.lctFlag = bits.shift();
-        img.interlaced = bits.shift();
-        img.sorted = bits.shift();
-        img.reserved = bits.splice(0, 2);
-        img.lctSize = bitsToNum(bits.splice(0, 3));
+      switch (block.identifier) {
+          case 'NETSCAPE':
+              this.#parseNetscapeExt(block);
+              break;
+          default:
+              this.#parseUnknownAppExt(block);
+              break;
+      }
+  }
 
-        if (img.lctFlag) {
-            img.lct = parseCT(1 << (img.lctSize + 1));
-        }
+  #parseUnknownExt (block) {
+    block.data = this.#readSubBlocks();
+    this.#handle('unknown', block);
+    // Was: handler.unknown && handler.unknown(block);
+  }
 
-        img.lzwMinCodeSize = st.readByte();
+  #parseExt (block) {
+    block.label = this.st.readByte();
+    switch (block.label) {
+        case 0xF9:
+            block.extType = 'gce';
+            this.#parseGCExt(block);
+            break;
+        case 0xFE:
+            block.extType = 'com';
+            this.#parseComExt(block);
+            break;
+        case 0x01:
+            block.extType = 'pte';
+            this.#parsePTExt(block);
+            break;
+        case 0xFF:
+            block.extType = 'app';
+            this.#parseAppExt(block);
+            break;
+        default:
+            block.extType = 'unknown';
+            this.#parseUnknownExt(block);
+            break;
+    }
+  } // End: #parseExt.
 
-        var lzwData = readSubBlocks();
+  #deinterlace (pixels, width) {
+      // Of course this defeats the purpose of interlacing. And it's *probably*
+      // the least efficient way it's ever been implemented. But nevertheless...
+      var newPixels = new Array(pixels.length);
+      var rows = pixels.length / width;
+      var cpRow = function (toRow, fromRow) {
+          var fromPixels = pixels.slice(fromRow * width, (fromRow + 1) * width);
+          newPixels.splice.apply(newPixels, [toRow * width, width].concat(fromPixels));
+      };
 
-        img.pixels = lzwDecode(img.lzwMinCodeSize, lzwData);
+      // See appendix E.
+      var offsets = [0, 4, 2, 1];
+      var steps = [8, 8, 4, 2];
 
-        if (img.interlaced) { // Move
-            img.pixels = deinterlace(img.pixels, img.width);
-        }
+      var fromRow = 0;
+      for (var pass = 0; pass < 4; pass++) {
+          for (var toRow = offsets[pass]; toRow < rows; toRow += steps[pass]) {
+              cpRow(toRow, fromRow)
+              fromRow++;
+          }
+      }
 
-        handler.img && handler.img(img);
-    };
+      return newPixels;
+  } // End: #deinterlace.
 
-    var parseBlock = function () {
-        var block = {};
-        block.sentinel = st.readByte();
+  #parseImg (img) {
+    img.leftPos = this.st.readUnsigned();
+    img.topPos = this.st.readUnsigned();
+    img.width = this.st.readUnsigned();
+    img.height = this.st.readUnsigned();
 
-        switch (String.fromCharCode(block.sentinel)) { // For ease of matching
-            case '!':
-                block.type = 'ext';
-                parseExt(block);
-                break;
-            case ',':
-                block.type = 'img';
-                parseImg(block);
-                break;
-            case ';':
-                block.type = 'eof';
-                handler.eof && handler.eof(block);
-                break;
-            default:
-                throw new Error('Unknown block: 0x' + block.sentinel.toString(16)); // TODO: Pad this with a 0.
-        }
+    var bits = byteToBitArr(this.st.readByte());
+    img.lctFlag = bits.shift();
+    img.interlaced = bits.shift();
+    img.sorted = bits.shift();
+    img.reserved = bits.splice(0, 2);
+    img.lctSize = bitsToNum(bits.splice(0, 3));
 
-        if (block.type !== 'eof') setTimeout(parseBlock, 0);
-    };
+    if (img.lctFlag) {
+        img.lct = this.#parseCT(1 << (img.lctSize + 1));
+    }
 
-    var parse = function () {
-        parseHeader();
-        setTimeout(parseBlock, 0);
-    };
+    img.lzwMinCodeSize = this.st.readByte();
 
-    parse();
-};
+    var lzwData = this.#readSubBlocks();
 
-export default parseGIF;
+    const decoder = new LzwDecoder(img.lzwMinCodeSize, lzwData);
+    img.pixels = decoder.decode();
+    // Was: img.pixels = lzwDecode(img.lzwMinCodeSize, lzwData);
+
+    if (img.interlaced) { // Move
+        img.pixels = this.#deinterlace(img.pixels, img.width);
+    }
+
+    this.#handle('img', img);
+    // Was: handler.img && handler.img(img);
+  } // End: #parseImg.
+
+  #parseBlock () {
+      var block = {};
+      block.sentinel = this.st.readByte();
+
+      switch (String.fromCharCode(block.sentinel)) { // For ease of matching
+          case '!':
+              block.type = 'ext';
+              this.#parseExt(block);
+              break;
+          case ',':
+              block.type = 'img';
+              this.#parseImg(block);
+              break;
+          case ';':
+              block.type = 'eof';
+              this.#handle('eof', block);
+              // Was: handler.eof && handler.eof(block);
+              break;
+          default:
+              throw new Error('Unknown block: 0x' + block.sentinel.toString(16)); // TODO: Pad this with a 0.
+      }
+
+      if (block.type !== 'eof') { this.#parseNextBlock(); }
+  } // End: #parseBlock.
+
+  #parseNextBlock () {
+    setTimeout(() => this.#parseBlock(), 0);
+  }
+
+  parse () {
+    this.#parseHeader();
+    this.#parseNextBlock();
+  }
+} // End: class GifParser.
