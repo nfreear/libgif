@@ -1,4 +1,4 @@
-import { lzwDecode, LzwDecoder } from './LzwDecoder.js';
+import LzwDecoder from './LzwDecoder.js';
 import { bitsToNum, byteToBitArr } from './util.js';
 
 /**
