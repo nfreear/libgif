@@ -3,8 +3,9 @@
   "type": "module",
   "exports": {
     ".": "index.js",
-    "./legacy": "libgif.js",
-    "./original": "libgif.js",
-    "./rubbable": "rubbable.js"
+    "./app": "example/app.js",
+    "./legacy:esm": "src/legacy/esm.js",
+    "./origin": "libgif.js",
+    "./rub:origin": "rubbable.js"
   }
 }
